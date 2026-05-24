@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Phòng Không Thủ Thành - Level Up Edition</title>
+    <style>
+        body {
+            margin: 0;
+            background-color: #0b0914;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            color: white;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+            touch-action: none; 
+        }
+        canvas {
+            background: linear-gradient(to bottom, #090d16, #111026);
+            border: 3px solid #3b82f6;
+            box-shadow: 0 0 30px rgba(59, 130, 246, 0.4);
+            cursor: none; 
+        }
+    </style>
+</head>
+<body>
+
+    <canvas id="defenseCanvas" width="800" height="600"></canvas>
+
+<script>
+const canvas = document.getElementById("defenseCanvas");
+const ctx = canvas.getContext("2d");
+
+// --- CẤU HÌNH NHÂN VẬT & CHỈ SỐ NÂNG CẤP ---
+const castle = {
+    height: 50,
+    color: '#475569',
+    hp: 100,
+    maxHp: 100
+};
+
+const gun = {
+    x: canvas.width / 2,
+    y: canvas.height - castle.height,
+    length: 45,
+    color: '#3b82f6',
+    bulletRadius: 4,     // Chỉ số nâng cấp: Cỡ đạn
+    fireRate: 150,       // Chỉ số nâng cấp: Tốc độ bắn (càng nhỏ càng nhanh)
+    multishot: 1         // Chỉ số nâng cấp: Số tia đạn (1, 2, hoặc 3)
+};
+
+// Hệ thống Cấp độ (Level & EXP)
+let playerLevel = 1;
+let playerExp = 0;
+let expNeeded = 50; // Số kinh nghiệm cần để lên cấp 2
+
+// Trạng thái game
+let score = 0;
+let gameOver = false;
+let isUpgradeScreen = false; // Trạng thái đang chọn thẻ nâng cấp
+let upgradeOptions = [];     // Lưu trữ 3 tùy chọn nâng cấp hiện tại
+
+let bullets = [];
+let enemies = [];
+let expGems = [];            // Mảng chứa các viên kim cương kinh nghiệm rơi ra
+let spawnRate = 60; 
+let frameCount = 0;
+let lastShotTime = 0;
+let crosshair = { x: canvas.width / 2, y: canvas.height / 2 - 100 };
+
+// --- ĐIỀU KHIỂN (Chuột & Cảm ứng) ---
+function updateCrosshairPos(clientX, clientY) {
+    if (isUpgradeScreen) return; // Đang chọn nâng cấp thì giữ nguyên tâm
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    
+    crosshair.x = (clientX - rect.left) * scaleX;
+    crosshair.y = (clientY - rect.top) * scaleY;
+    if (crosshair.y > gun.y - 10) crosshair.y = gun.y - 10;
+}
+
+canvas.addEventListener('mousemove', (e) => {
+    updateCrosshairPos(e.clientX, e.clientY);
+});
+
+// Xử lý click chuột/chạm tay để CHỌN THẺ NÂNG CẤP hoặc CHƠI LẠI
+canvas.addEventListener('mousedown', (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const clickX = (e.clientX - rect.left) * scaleX;
+    const clickY = (e.clientY - rect.top) * scaleY;
+
+    if (gameOver) {
+        resetGame();
+        return;
+    }
+
+    if (isUpgradeScreen) {
+        // Kiểm tra xem người chơi click trúng thẻ nào
+        upgradeOptions.forEach(opt => {
+            if (clickX >= opt.x && clickX <= opt.x + opt.w &&
+                clickY >= opt.y && clickY <= opt.y + opt.h) {
+                
+                // Kích hoạt tính năng của thẻ đó
+                opt.action(); 
+                
+                // Thoát màn hình nâng cấp, tiếp tục chơi
+                isUpgradeScreen = false;
+                gameLoop();
+            }
+        });
+    }
+});
+
+canvas.addEventListener('touchstart', (e) => {
+    updateCrosshairPos(e.touches[0].clientX, e.touches[0].clientY);
+});
+canvas.addEventListener('touchmove', (e) => {
+    e.preventDefault();
+    updateCrosshairPos(e.touches[0].clientX, e.touches[0].clientY);
+});
+
+function resetGame() {
+    castle.hp = 100;
+    castle.maxHp = 100;
+    gun.bulletRadius = 4;
+    gun.fireRate = 150;
+    gun.multishot = 1;
+    playerLevel = 1;
+    playerExp = 0;
+    expNeeded = 50;
+    score = 0;
+    bullets = [];
+    enemies = [];
+    expGems = [];
+    spawnRate = 60;
+    frameCount = 0;
+    gameOver = false;
+    isUpgradeScreen = false;
+    crosshair = { x: canvas.width / 2, y: canvas.height / 2 - 100 };
+    gameLoop();
+}
+
+// --- HỆ THỐNG LIÊN THANH & BẮN LAN ---
+function autoShoot() {
+    if (isUpgradeScreen) return;
+    const currentTime = Date.now();
+    if (currentTime - lastShotTime > gun.fireRate) {
+        const angle = Math.atan2(crosshair.y - gun.y, crosshair.x - gun.x);
+        
+        if (gun.multishot === 1) {
+            createBullet(angle);
+        } else if (gun.multishot === 2) {
+            createBullet(angle - 0.1); // Tia lệch trái
+            createBullet(angle + 0.1); // Tia lệch phải
+        } else {
+            createBullet(angle - 0.2); // Trái
+            createBullet(angle);       // Giữa
+            createBullet(angle + 0.2); // Phải
+        }
+        lastShotTime = currentTime;
+    }
+}
+
+function createBullet(angle) {
+    bullets.push({
+        x: gun.x,
+        y: gun.y,
+        radius: gun.bulletRadius,
+        color: '#f59e0b',
+        velocity: { x: Math.cos(angle) * 12, y: Math.sin(angle) * 12 }
+    });
+}
+
+function spawnEnemy() {
+    enemies.push({
+        x: Math.random() * (canvas.width - 40) + 20,
+        y: -20,
+        radius: Math.random() < 0.15 ? 22 : 12,
+        color: '#ef4444',
+        speed: Math.random() * 1 + 1.2
+    });
+}
+
+// --- HÀM XỬ LÝ LÊN CẤP VÀ TẠO 3 THẺ NGẪU NHIÊN ---
+function checkLevelUp() {
+    if (playerExp >= expNeeded) {
+        playerExp -= expNeeded;
+        playerLevel++;
+        expNeeded = Math.floor(expNeeded * 1.4); // Cấp sau cần nhiều EXP hơn
+        isUpgradeScreen = true;
+
+        // Định nghĩa danh sách các nâng cấp có thể xuất hiện
+        const allUpgrades = [
+            { 
+                title: "TỐC ĐỘ BẮN", 
+                desc: "Súng máy xả đạn nhanh hơn 20%", 
+                action: () => { gun.fireRate = Math.max(60, gun.fireRate - 25); } 
+            },
+            { 
+                title: "ĐẠN SIÊU CẤP", 
+                desc: "Tăng kích thước đạn thêm +2 pixel", 
+                action: () => { gun.bulletRadius += 2; } 
+            },
+            { 
+                title: "SỬA THÀNH", 
+                desc: "Hồi lại 40 HP cho thành trì", 
+                action: () => { castle.hp = Math.min(castle.maxHp, castle.hp + 40); } 
+            },
+            { 
+                title: "GIA CỐ THÀNH", 
+                desc: "Tăng tối đa +30 HP cho thành", 
+                action: () => { castle.maxHp += 30; castle.hp += 30; } 
+            },
+            { 
+                title: "SÚNG BẮN LAN", 
+                desc: "Tăng số lượng tia đạn (Tối đa 3 tia)", 
+                action: () => { gun.multishot = Math.min(3, gun.multishot + 1); } 
+            }
+        ];
+
+        // Xáo trộn ngẫu nhiên để lấy ra 3 thẻ
+        allUpgrades.sort(() => Math.random() - 0.5);
+        upgradeOptions = allUpgrades.slice(0, 3);
+
+        // Tính toán tọa độ hiển thị cho 3 cái thẻ trên canvas
+        const cardW = 200, cardH = 150, gap = 30;
+        const totalW = (cardW * 3) + (gap * 2);
+        let startX = (canvas.width - totalW) / 2;
+
+        upgradeOptions.forEach((opt, index) => {
+            opt.x = startX + index * (cardW + gap);
+            opt.y = canvas.height / 2 - 50;
+            opt.w = cardW;
+            opt.h = cardH;
+        });
+    }
+}
+
+// --- VÒNG LẶP GAME CHÍNH ---
+function gameLoop() {
+    if (gameOver) return;
+
+    if (isUpgradeScreen) {
+        drawUpgradeScreen();
+        return; // Tạm dừng trò chơi khi đang hiện bảng nâng cấp
+    }
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    autoShoot();
+
+    // A. VẼ THÀNH TRÌ & SÚNG MÁY
+    ctx.fillStyle = castle.color;
+    ctx.fillRect(0, canvas.height - castle.height, canvas.width, castle.height);
+
+    const gunAngle = Math.atan2(crosshair.y - gun.y, crosshair.x - gun.x);
+    ctx.beginPath();
+    ctx.lineWidth = 10 + (gun.bulletRadius / 2); // Nòng súng to ra theo cỡ đạn
+    ctx.strokeStyle = gun.color;
+    ctx.lineCap = "round";
+    ctx.moveTo(gun.x, gun.y);
+    ctx.lineTo(gun.x + Math.cos(gunAngle) * gun.length, gun.y + Math.sin(gunAngle) * gun.length);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(gun.x, gun.y, 20, Math.PI, 0);
+    ctx.fillStyle = '#1e3a8a';
+    ctx.fill();
+
+    // B. XỬ LÝ ĐẠN
+    for (let i = bullets.length - 1; i >= 0; i--) {
+        let b = bullets[i];
+        b.x += b.velocity.x; b.y += b.velocity.y;
+
+        ctx.beginPath();
+        ctx.arc(b.x, b.y, b.radius, 0, Math.PI * 2);
+        ctx.fillStyle = b.color;
+        ctx.fill();
+
+        if (b.x < 0 || b.x > canvas.width || b.y < 0 || b.y > canvas.height) {
+            bullets.splice(i, 1);
+        }
+    }
+
+    // C. XỬ LÝ VIÊN EXP (Rơi xuống từ quái bị hạ)
+    for (let i = expGems.length - 1; i >= 0; i--) {
+        let g = expGems[i];
+        g.y += 1.5; // Tốc độ rơi hạt EXP hành tinh khá chậm
+
+        // Vẽ viên kim cương EXP màu tím hồng phát sáng
+        ctx.beginPath();
+        ctx.fillStyle = '#f43f5e';
+        ctx.arc(g.x, g.y, 5, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Tự động thu thập khi hạt EXP chạm tới mặt đất (Thành trì)
+        if (g.y >= canvas.height - castle.height) {
+            playerExp += g.amount;
+            expGems.splice(i, 1);
+            checkLevelUp(); // Kiểm tra xem có đủ điểm lên cấp không
+        }
+    }
+
+    // D. XỬ LÝ QUÁI VẬT
+    frameCount++;
+    if (frameCount % spawnRate === 0) {
+        spawnEnemy();
+        if (spawnRate > 12) spawnRate -= 1;
+    }
+
+    for (let i = enemies.length - 1; i >= 0; i--) {
+        let e = enemies[i];
+        e.y += e.speed;
+
+        ctx.beginPath();
+        ctx.arc(e.x, e.y, e.radius, 0, Math.PI * 2);
+        ctx.fillStyle = e.color;
+        ctx.fill();
+
+        // Quái đập vào thành trì
+        if (e.y + e.radius >= canvas.height - castle.height) {
+            castle.hp -= (e.radius > 15) ? 20 : 10;
+            enemies.splice(i, 1);
+            if (castle.hp <= 0) { castle.hp = 0; gameOver = true; }
+            continue;
+        }
+
+        // Đạn bắn trúng quái
+        for (let j = bullets.length - 1; j >= 0; j--) {
+            let b = bullets[j];
+            let dist = Math.hypot(b.x - e.x, b.y - e.y);
+
+            if (dist < b.radius + e.radius) {
+                // Quái chết -> rơi ra viên EXP tại vị trí đó
+                expGems.push({ x: e.x, y: e.y, amount: (e.radius > 15) ? 25 : 10 });
+                
+                enemies.splice(i, 1);
+                bullets.splice(j, 1);
+                score += (e.radius > 15) ? 30 : 10;
+                break;
+            }
+        }
+    }
+
+    // E. VẼ TÂM NGẮM
+    ctx.strokeStyle = isUpgradeScreen ? 'transparent' : '#10b981';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(crosshair.x, crosshair.y, 12, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(crosshair.x - 18, crosshair.y); ctx.lineTo(crosshair.x + 18, crosshair.y);
+    ctx.moveTo(crosshair.x, crosshair.y - 18); ctx.lineTo(crosshair.x, crosshair.y + 18);
+    ctx.stroke();
+
+    // F. GIAO DIỆN HỘ TRỢ ĐIỂM, MÁU & LEVEL
+    ctx.fillStyle = "white";
+    ctx.font = "bold 16px Arial";
+    ctx.fillText("SCORE: " + score, 20, 30);
+    ctx.fillText("LV. " + playerLevel, 20, 55);
+
+    // Vẽ Thanh Máu Thành Trì
+    ctx.fillStyle = "#334155"; ctx.fillRect(90, 18, 140, 14);
+    ctx.fillStyle = castle.hp > 30 ? "#10b981" : "#ef4444";
+    ctx.fillRect(90, 18, (castle.hp / castle.maxHp) * 140, 14);
+    
+    // Vẽ Thanh Kinh Nghiệm (EXP Bar) màu xanh dương
+    ctx.fillStyle = "#334155"; ctx.fillRect(90, 42, 140, 10);
+    ctx.fillStyle = "#3b82f6";
+    ctx.fillRect(90, 42, Math.min(140, (playerExp / expNeeded) * 140), 10);
+
+    // MÀN HÌNH THUA CUỘC
+    if (gameOver) {
+        ctx.fillStyle = "rgba(0, 0, 0, 0.9)"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = "#ef4444"; ctx.font = "bold 40px Arial"; ctx.textAlign = "center";
+        ctx.fillText("THÀNH TRÌ ĐÃ BỊ SỤP ĐỔ!", canvas.width / 2, canvas.height / 2 - 20);
+        ctx.fillStyle = "white"; ctx.font = "20px Arial";
+        ctx.fillText("Kỷ lục cấp độ đạt được: Lv." + playerLevel + " - Điểm: " + score, canvas.width / 2, canvas.height / 2 + 20);
+        ctx.fillText("Chạm màn hình để CHƠI LẠI", canvas.width / 2, canvas.height / 2 + 70);
+        ctx.textAlign = "left";
+        return;
+    }
+
+    requestAnimationFrame(gameLoop);
+}
+
+// --- GIAO DIỆN CHỌN THẺ NÂNG CẤP (UPGRADE CARD) ---
+function drawUpgradeScreen() {
+    // Hiện con trỏ chuột mặc định để người chơi dễ click chọn thẻ
+    canvas.style.cursor = "default";
+
+    // Làm mờ nền game phía sau
+    ctx.fillStyle = "rgba(11, 9, 20, 0.7)";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Tiêu đề Lên cấp
+    ctx.fillStyle = "#f59e0b";
+    ctx.font = "bold 36px Arial";
+    ctx.textAlign = "center";
+    ctx.fillText("THĂNG CẤP! CHỌN KỸ NĂNG", canvas.width / 2, canvas.height / 2 - 120);
+
+    // Vẽ 3 thẻ nâng cấp
+    upgradeOptions.forEach(opt => {
+        // Vẽ khung thẻ
+        ctx.fillStyle = "#1e1b4b";
+        ctx.strokeStyle = "#6366f1";
+        ctx.lineWidth = 3;
+        ctx.fillRect(opt.x, opt.y, opt.w, opt.h);
+        ctx.strokeRect(opt.x, opt.y, opt.w, opt.h);
+
+        // Tên nâng cấp
+        ctx.fillStyle = "#67e8f9";
+        ctx.font = "bold 18px Arial";
+        ctx.fillText(opt.title, opt.x + opt.w / 2, opt.y + 40);
+
+        // Mô tả chi tiết (Tự động xuống dòng cơ bản)
+        ctx.fillStyle = "#e2e8f0";
+        ctx.font = "14px Arial";
+        ctx.fillText(opt.desc, opt.x + opt.w / 2, opt.y + 90);
+    });
+
+    ctx.textAlign = "left";
+    canvas.style.cursor = "none"; // Ẩn lại chuột khi tiếp tục chơi
+}
+
+// Khởi chạy
+gameLoop();
+</script>
+</body>
+</html>
